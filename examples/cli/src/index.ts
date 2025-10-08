@@ -8,13 +8,14 @@ import { OpenAIAdapter } from "@tanstack/ai-openai";
 import { AnthropicAdapter } from "@tanstack/ai-anthropic";
 import { OllamaAdapter } from "@tanstack/ai-ollama";
 import { GeminiAdapter } from "@tanstack/ai-gemini";
-import type { AIAdapter, Message } from "@tanstack/ai";
+import type { AIAdapter, Message, ToolCall } from "@tanstack/ai";
 import {
   getApiKeyUrl,
   saveApiKeyToEnv,
   maskApiKey,
   validateApiKey,
 } from "./utils.js";
+import { AVAILABLE_TOOLS, executeTool, listTools } from "./tools.js";
 
 // Load environment variables
 dotenv.config();
@@ -101,6 +102,26 @@ program
   .option("--text <text>", "Text to embed")
   .action(async (options) => {
     await runEmbed(options);
+  });
+
+program
+  .command("tools")
+  .description(
+    "Interactive chat with tool/function calling (OpenAI only for now)"
+  )
+  .option(
+    "-p, --provider <provider>",
+    "AI provider (currently only openai supported)",
+    "openai"
+  )
+  .option("-m, --model <model>", "Model to use")
+  .option(
+    "-k, --api-key <key>",
+    "API key (can also be set via environment variable)"
+  )
+  .option("-d, --debug", "Show raw JSON stream chunks (for debugging)")
+  .action(async (options) => {
+    await runTools(options);
   });
 
 async function promptForApiKey(
@@ -514,6 +535,312 @@ async function runEmbed(options: any) {
   } catch (error) {
     spinner.stop();
     console.error(chalk.red("\nError:"), error);
+  }
+}
+
+async function runTools(options: any) {
+  console.log(chalk.cyan("\n=== TanStack AI - Tool Calling Demo ==="));
+  console.log(chalk.gray(`Provider: ${options.provider}`));
+
+  if (options.provider !== "openai") {
+    console.log(
+      chalk.yellow(
+        "\n⚠️  Tool calling is currently only supported with OpenAI."
+      )
+    );
+    console.log(chalk.gray("Other providers coming soon!\n"));
+    return;
+  }
+
+  // Enable adapter-level debugging if CLI debug is on
+  if (options.debug) {
+    process.env.DEBUG_TOOLS = "true";
+  }
+
+  const adapter = await createAdapter(options.provider, options.apiKey);
+  const ai = new AI(adapter);
+
+  console.log(chalk.green(`\n✅ Connected to ${options.provider}\n`));
+  console.log(chalk.cyan("🛠️  TanStack AI - Function Calling"));
+  console.log(
+    chalk.gray('Type "exit" to quit, "tools" to list available tools\n')
+  );
+
+  console.log(chalk.magenta("Available tools:"));
+  console.log(chalk.gray(listTools()));
+  console.log("");
+
+  console.log(chalk.yellow("💡 Try these prompts:"));
+  console.log(chalk.gray("  - What's 123 * 456?"));
+  console.log(chalk.gray("  - What's the weather in Paris?"));
+  console.log(chalk.gray("  - Search for React tutorials"));
+  console.log(chalk.gray("  - What time is it in Tokyo?"));
+  console.log("");
+
+  const messages: Message[] = [
+    {
+      role: "system",
+      content: `You are a helpful AI assistant with access to the following tools:
+
+${listTools()}
+
+IMPORTANT: You MUST use the appropriate tool when the user asks for:
+- Weather information → use get_weather
+- Mathematical calculations → use calculate  
+- Search queries → use search
+- Time information → use get_current_time
+
+Do not attempt to answer these questions without using the tools. Always call the appropriate tool to get accurate, real-time information.`,
+    },
+  ];
+
+  while (true) {
+    const { prompt } = await inquirer.prompt([
+      {
+        type: "input",
+        name: "prompt",
+        message: chalk.green("You:"),
+      },
+    ]);
+
+    if (prompt.toLowerCase() === "exit") {
+      console.log(chalk.yellow("\nGoodbye! 👋"));
+      break;
+    }
+
+    if (prompt.toLowerCase() === "tools") {
+      console.log(chalk.magenta("\nAvailable tools:"));
+      console.log(chalk.gray(listTools()));
+      console.log("");
+      continue;
+    }
+
+    messages.push({ role: "user", content: prompt });
+
+    // Process the conversation with potential tool calls
+    let continueLoop = true;
+    let maxIterations = 5; // Prevent infinite loops
+    let iteration = 0;
+
+    while (continueLoop && iteration < maxIterations) {
+      iteration++;
+      const spinner = ora("Thinking...").start();
+
+      try {
+        const model = options.model || "gpt-3.5-turbo-0125";
+
+        spinner.text = "Assistant:";
+        spinner.stopAndPersist({ symbol: chalk.blue("🤖") });
+
+        let fullContent = "";
+        let totalTokens = 0;
+        const toolCalls: ToolCall[] = [];
+        const toolCallsMap = new Map<
+          number,
+          { id: string; name: string; args: string }
+        >();
+
+        if (options.debug) {
+          console.log(chalk.gray("\n--- Streaming JSON Chunks ---\n"));
+          console.log(chalk.gray(`Model: ${model}`));
+          console.log(chalk.gray(`Tools provided: ${AVAILABLE_TOOLS.length}`));
+          console.log(
+            chalk.gray(
+              `Tool names: ${AVAILABLE_TOOLS.map((t) => t.function.name).join(
+                ", "
+              )}\n`
+            )
+          );
+          console.log(chalk.gray(`Tool definitions sample:`));
+          console.log(chalk.gray(JSON.stringify(AVAILABLE_TOOLS[0], null, 2)));
+          console.log("");
+        }
+
+        // Stream with tools
+        const streamOptions = {
+          model,
+          messages,
+          temperature: 0.7,
+          maxTokens: 1000,
+          tools: AVAILABLE_TOOLS,
+          toolChoice: "auto" as const,
+        };
+
+        if (options.debug) {
+          console.log(chalk.gray("Stream options being sent:"));
+          console.log(chalk.gray(`  - model: ${streamOptions.model}`));
+          console.log(
+            chalk.gray(`  - messages: ${streamOptions.messages.length}`)
+          );
+          console.log(chalk.gray(`  - tools: ${streamOptions.tools.length}`));
+          console.log(
+            chalk.gray(`  - toolChoice: ${streamOptions.toolChoice}\n`)
+          );
+        }
+
+        for await (const chunk of ai.streamChat(streamOptions)) {
+          if (options.debug) {
+            console.log(chalk.gray(JSON.stringify(chunk)));
+          }
+
+          if (chunk.type === "content") {
+            if (!options.debug && chunk.delta) {
+              process.stdout.write(chunk.delta);
+            }
+            fullContent = chunk.content;
+          } else if (chunk.type === "tool_call") {
+            // Accumulate tool call information
+            const existing = toolCallsMap.get(chunk.index) || {
+              id: chunk.toolCall.id,
+              name: "",
+              args: "",
+            };
+
+            if (chunk.toolCall.function.name) {
+              existing.name = chunk.toolCall.function.name;
+            }
+            existing.args += chunk.toolCall.function.arguments;
+
+            toolCallsMap.set(chunk.index, existing);
+          } else if (chunk.type === "done") {
+            if (chunk.usage) {
+              totalTokens = chunk.usage.totalTokens;
+              if (options.debug) {
+                console.log(
+                  chalk.green(`\n✅ Done! Reason: ${chunk.finishReason}`)
+                );
+                console.log(
+                  chalk.gray(`   Total tokens: ${chunk.usage.totalTokens}`)
+                );
+              }
+            }
+
+            // Check if we need to execute tools
+            if (chunk.finishReason === "tool_calls" && toolCallsMap.size > 0) {
+              console.log("\n");
+
+              // Convert map to array of tool calls
+              toolCallsMap.forEach((call) => {
+                toolCalls.push({
+                  id: call.id,
+                  type: "function",
+                  function: {
+                    name: call.name,
+                    arguments: call.args,
+                  },
+                });
+              });
+            }
+          } else if (chunk.type === "error") {
+            console.error(chalk.red(`\n❌ Error: ${chunk.error.message}`));
+          }
+        }
+
+        if (options.debug) {
+          console.log(chalk.gray("\n--- End of Stream ---\n"));
+          if (fullContent) {
+            console.log(chalk.blue("Full response:"), fullContent);
+          }
+        }
+
+        // Add assistant message to history
+        if (toolCalls.length > 0) {
+          // Assistant wants to call tools
+          messages.push({
+            role: "assistant",
+            content: fullContent || null,
+            toolCalls,
+          });
+
+          console.log(
+            chalk.cyan(`\n🔧 Executing ${toolCalls.length} tool call(s)...\n`)
+          );
+
+          // Execute each tool
+          for (const toolCall of toolCalls) {
+            const toolName = toolCall.function.name;
+            const toolArgs = toolCall.function.arguments;
+
+            console.log(chalk.magenta(`  → ${toolName}(`));
+            try {
+              const parsedArgs = JSON.parse(toolArgs);
+              console.log(
+                chalk.gray(
+                  `      ${JSON.stringify(parsedArgs, null, 2)
+                    .split("\n")
+                    .join("\n      ")}`
+                )
+              );
+              console.log(chalk.magenta(`    )`));
+            } catch {
+              console.log(chalk.gray(`      ${toolArgs}`));
+              console.log(chalk.magenta(`    )`));
+            }
+
+            // Execute the tool
+            const toolSpinner = ora(`Executing ${toolName}...`).start();
+            try {
+              const result = await executeTool(toolName, toolArgs);
+              toolSpinner.succeed(chalk.green(`${toolName} completed`));
+
+              if (options.debug) {
+                console.log(chalk.gray(`    Result: ${result}`));
+              }
+
+              // Add tool result to messages
+              messages.push({
+                role: "tool",
+                content: result,
+                toolCallId: toolCall.id,
+                name: toolName,
+              });
+            } catch (error: any) {
+              toolSpinner.fail(chalk.red(`${toolName} failed`));
+              console.error(chalk.red(`    Error: ${error.message}`));
+
+              // Add error result
+              messages.push({
+                role: "tool",
+                content: JSON.stringify({
+                  error: true,
+                  message: error.message,
+                }),
+                toolCallId: toolCall.id,
+                name: toolName,
+              });
+            }
+          }
+
+          console.log("");
+          // Continue the loop to get the final response
+          continueLoop = true;
+        } else {
+          // Normal response, no tools
+          if (!options.debug) {
+            console.log("\n");
+          }
+
+          if (totalTokens > 0 && !options.debug) {
+            console.log(chalk.gray(`[Tokens: ${totalTokens}]\n`));
+          }
+
+          messages.push({
+            role: "assistant",
+            content: fullContent,
+          });
+
+          continueLoop = false;
+        }
+      } catch (error) {
+        spinner.stop();
+        console.error(chalk.red("\nError:"), error);
+        continueLoop = false;
+      }
+    }
+
+    if (iteration >= maxIterations) {
+      console.log(chalk.yellow("\n⚠️  Maximum tool call iterations reached"));
+    }
   }
 }
 

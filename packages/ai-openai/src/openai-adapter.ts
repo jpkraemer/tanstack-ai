@@ -38,7 +38,7 @@ export class OpenAIAdapter extends BaseAdapter {
   async chatCompletion(
     options: ChatCompletionOptions
   ): Promise<ChatCompletionResult> {
-    const response = await this.client.chat.completions.create({
+    const requestParams: any = {
       model: options.model || "gpt-3.5-turbo",
       messages: options.messages.map((msg) => {
         if (msg.role === "tool" && msg.toolCallId) {
@@ -71,13 +71,19 @@ export class OpenAIAdapter extends BaseAdapter {
       frequency_penalty: options.frequencyPenalty,
       presence_penalty: options.presencePenalty,
       stop: options.stopSequences,
-      tools: options.tools?.map((t) => ({
+      stream: false,
+    };
+
+    // Only add tools if they exist
+    if (options.tools && options.tools.length > 0) {
+      requestParams.tools = options.tools.map((t) => ({
         type: t.type,
         function: t.function,
-      })),
-      tool_choice: options.toolChoice as any,
-      stream: false,
-    });
+      }));
+      requestParams.tool_choice = options.toolChoice || "auto";
+    }
+
+    const response = await this.client.chat.completions.create(requestParams);
 
     const choice = response.choices[0];
 
@@ -156,7 +162,21 @@ export class OpenAIAdapter extends BaseAdapter {
   async *chatStream(
     options: ChatCompletionOptions
   ): AsyncIterable<import("@tanstack/ai").StreamChunk> {
-    const stream = await this.client.chat.completions.create({
+    // Debug: Log incoming options
+    if (process.env.DEBUG_TOOLS) {
+      console.error(
+        "[DEBUG chatStream] Received options.tools:",
+        options.tools ? `${options.tools.length} tools` : "undefined"
+      );
+      if (options.tools && options.tools.length > 0) {
+        console.error(
+          "[DEBUG chatStream] First tool:",
+          JSON.stringify(options.tools[0], null, 2)
+        );
+      }
+    }
+
+    const requestParams: any = {
       model: options.model || "gpt-3.5-turbo",
       messages: options.messages.map((msg) => {
         if (msg.role === "tool" && msg.toolCallId) {
@@ -189,13 +209,44 @@ export class OpenAIAdapter extends BaseAdapter {
       frequency_penalty: options.frequencyPenalty,
       presence_penalty: options.presencePenalty,
       stop: options.stopSequences,
-      tools: options.tools?.map((t) => ({
+      stream: true,
+    };
+
+    // Only add tools if they exist
+    if (options.tools && options.tools.length > 0) {
+      requestParams.tools = options.tools.map((t) => ({
         type: t.type,
         function: t.function,
-      })),
-      tool_choice: options.toolChoice as any,
-      stream: true,
-    });
+      }));
+      if (options.toolChoice) {
+        requestParams.tool_choice = options.toolChoice;
+      }
+
+      // Debug: Log what we're sending
+      if (process.env.DEBUG_TOOLS) {
+        console.error(
+          "[DEBUG] Sending tools to OpenAI:",
+          JSON.stringify(requestParams.tools, null, 2)
+        );
+        console.error("[DEBUG] Tool choice:", requestParams.tool_choice);
+      }
+    } else if (process.env.DEBUG_TOOLS) {
+      console.error("[DEBUG] NO TOOLS - options.tools is empty or undefined");
+      console.error("[DEBUG] options.tools:", options.tools);
+    }
+
+    // Final debug: Show the complete request
+    if (process.env.DEBUG_TOOLS) {
+      console.error(
+        "[DEBUG] Final request params keys:",
+        Object.keys(requestParams)
+      );
+      console.error("[DEBUG] Has tools property:", "tools" in requestParams);
+    }
+
+    const stream = (await this.client.chat.completions.create(
+      requestParams
+    )) as any;
 
     let accumulatedContent = "";
     const timestamp = Date.now();

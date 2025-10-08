@@ -8,10 +8,12 @@ An interactive command-line interface for the TanStack AI library, demonstrating
 - 💾 **Save Keys to .env**: Option to save API keys for future sessions
 - ✅ **Key Validation**: Validates API keys before proceeding
 - 🔄 **Multi-Provider Support**: OpenAI, Anthropic, Ollama, and Google Gemini
-- 💬 **Interactive Chat**: Real-time conversation with AI models
+- 💬 **Interactive Chat**: Real-time conversation with AI models (streaming for ALL providers)
+- 🛠️ **Tool/Function Calling**: AI can call functions with automatic execution
 - 📝 **Text Generation**: Generate text from prompts
 - 📊 **Summarization**: Summarize long texts in various styles
 - 🔢 **Embeddings**: Generate text embeddings for semantic search
+- 🐛 **Debug Mode**: See raw JSON stream chunks
 
 ## Installation
 
@@ -85,6 +87,31 @@ pnpm dev summarize --provider anthropic --text "Your long text here..." --style 
 pnpm dev embed --provider openai --text "Text to create embeddings for"
 ```
 
+### Tool/Function Calling
+
+```bash
+# Interactive tool calling demo (OpenAI only for now)
+pnpm dev tools --provider openai
+
+# With debug mode to see JSON chunks
+pnpm dev tools --provider openai --debug
+
+# Or quick shortcut
+pnpm tools
+```
+
+Example interaction:
+
+```
+You: What's 847 * 392?
+🤖
+🔧 Executing 1 tool call(s)...
+  → calculate({"expression": "847 * 392"})
+✓ calculate completed
+
+🤖 The result is 332,024.
+```
+
 ## API Key Sources
 
 - **OpenAI**: https://platform.openai.com/api-keys
@@ -140,6 +167,7 @@ pnpm chat      # Quick chat with default provider
 pnpm generate  # Quick text generation
 pnpm summarize # Quick summarization
 pnpm embed     # Quick embeddings
+pnpm tools     # Tool calling demo
 ```
 
 ## Security Notes

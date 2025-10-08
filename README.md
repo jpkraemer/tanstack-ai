@@ -1,95 +1,456 @@
-# @tanstack/ai - Open Source AI SDK
+# @tanstack/ai
 
-A powerful, open-source alternative to Vercel's AI SDK that puts developers first. Built by the community, for the community.
+A powerful, open-source AI SDK with a unified interface across multiple providers. No vendor lock-in, no proprietary formats, just clean TypeScript and honest open source.
 
-## 🚀 Features
+## Features
 
-- **Multi-Provider Support**: Seamlessly switch between OpenAI, Anthropic, Ollama, and Google Gemini
-- **Unified API**: One consistent interface across all AI providers
-- **Streaming Support**: Real-time streaming for chat and text generation
-- **TypeScript First**: Full type safety and excellent IDE support
-- **Modular Architecture**: Use only what you need with separate adapter packages
-- **No Vendor Lock-in**: Your code, your choice, your freedom
+- **Multi-Provider Support** - OpenAI, Anthropic, Ollama, Google Gemini
+- **Unified API** - Same interface across all providers
+- **Structured Streaming** - JSON chunks with token deltas, tool calls, and usage stats
+- **Tool/Function Calling** - First-class support for AI function calling
+- **TypeScript First** - Full type safety throughout
+- **Zero Lock-in** - Switch providers at runtime without code changes
 
-## 📦 Packages
-
-- `@tanstack/ai` - Core library with base interfaces and utilities
-- `@tanstack/ai-openai` - OpenAI adapter (GPT-3.5, GPT-4, etc.)
-- `@tanstack/ai-anthropic` - Anthropic Claude adapter
-- `@tanstack/ai-ollama` - Ollama adapter for local LLMs
-- `@tanstack/ai-gemini` - Google Gemini adapter
-
-## 🛠️ Installation
+## Installation
 
 ```bash
-# Install core package
+# Core library
 npm install @tanstack/ai
 
-# Install adapter(s) you need
+# Provider adapters (install what you need)
 npm install @tanstack/ai-openai
 npm install @tanstack/ai-anthropic
 npm install @tanstack/ai-ollama
 npm install @tanstack/ai-gemini
 ```
 
-## 🎯 Quick Start
+## Architecture
 
-### Basic Chat Example
+### Core Concepts
+
+**1. Provider-Agnostic Design**
+
+All providers implement the same `AIAdapter` interface:
+
+```typescript
+interface AIAdapter {
+  // Chat
+  chatCompletion(options: ChatCompletionOptions): Promise<ChatCompletionResult>;
+  chatStream(options: ChatCompletionOptions): AsyncIterable<StreamChunk>;
+
+  // Text generation
+  generateText(options: TextGenerationOptions): Promise<TextGenerationResult>;
+
+  // Summarization
+  summarize(options: SummarizationOptions): Promise<SummarizationResult>;
+
+  // Embeddings
+  createEmbeddings(options: EmbeddingOptions): Promise<EmbeddingResult>;
+}
+```
+
+**2. Structured Streaming**
+
+Streams return typed JSON chunks instead of raw strings:
+
+```typescript
+type StreamChunk =
+  | ContentStreamChunk // Text tokens with delta + accumulated content
+  | ToolCallStreamChunk // Function call information
+  | DoneStreamChunk // Completion signal with token usage
+  | ErrorStreamChunk; // Error information
+```
+
+**3. Adapter Pattern**
+
+The `AI` class wraps any adapter and provides a consistent API:
+
+```typescript
+const ai = new AI(adapter); // Initialize with adapter
+await ai.chat(options); // Standard chat
+ai.streamChat(options); // Structured streaming
+ai.setAdapter(newAdapter); // Switch providers
+```
+
+## API Reference
+
+### AI Class
+
+#### Constructor
+
+```typescript
+constructor(adapter: AIAdapter)
+```
+
+Create an AI instance with a specific provider adapter.
+
+#### Methods
+
+##### `chat(options): Promise<ChatCompletionResult>`
+
+Non-streaming chat completion.
+
+```typescript
+const result = await ai.chat({
+  model: "gpt-3.5-turbo",
+  messages: [
+    { role: "system", content: "You are helpful" },
+    { role: "user", content: "Hello!" },
+  ],
+  temperature: 0.7,
+  maxTokens: 1000,
+});
+
+console.log(result.content);
+console.log(result.usage.totalTokens);
+```
+
+##### `streamChat(options): AsyncIterable<StreamChunk>`
+
+Structured streaming with JSON chunks.
+
+```typescript
+for await (const chunk of ai.streamChat({
+  model: "gpt-3.5-turbo",
+  messages: [{ role: "user", content: "Hello" }],
+  tools: [...],           // Optional
+  toolChoice: "auto"      // Optional: "auto" | "none" | { type, function }
+})) {
+  switch (chunk.type) {
+    case "content":
+      console.log("Delta:", chunk.delta);
+      console.log("Full:", chunk.content);
+      break;
+    case "tool_call":
+      console.log("Tool:", chunk.toolCall.function.name);
+      console.log("Args:", chunk.toolCall.function.arguments);
+      break;
+    case "done":
+      console.log("Finish:", chunk.finishReason);
+      console.log("Usage:", chunk.usage);
+      break;
+    case "error":
+      console.error("Error:", chunk.error.message);
+      break;
+  }
+}
+```
+
+##### `generateText(options): Promise<TextGenerationResult>`
+
+Generate text from a prompt.
+
+```typescript
+const result = await ai.generateText({
+  model: "gpt-3.5-turbo-instruct",
+  prompt: "Once upon a time",
+  maxTokens: 100,
+});
+
+console.log(result.text);
+```
+
+##### `summarize(options): Promise<SummarizationResult>`
+
+Summarize text.
+
+```typescript
+const result = await ai.summarize({
+  model: "gpt-3.5-turbo",
+  text: "Long text to summarize...",
+  style: "bullet-points", // "bullet-points" | "paragraph" | "concise"
+  maxLength: 200,
+});
+
+console.log(result.summary);
+```
+
+##### `embed(options): Promise<EmbeddingResult>`
+
+Generate embeddings.
+
+```typescript
+const result = await ai.embed({
+  model: "text-embedding-ada-002",
+  input: ["Text 1", "Text 2"],
+});
+
+console.log(result.embeddings); // number[][]
+```
+
+##### `setAdapter(adapter): void`
+
+Switch providers at runtime.
+
+```typescript
+ai.setAdapter(new AnthropicAdapter({ apiKey: "..." }));
+```
+
+### Types
+
+#### Message
+
+```typescript
+interface Message {
+  role: "system" | "user" | "assistant" | "tool";
+  content: string | null;
+  name?: string;
+  toolCalls?: ToolCall[]; // For assistant messages with tool calls
+  toolCallId?: string; // For tool response messages
+}
+```
+
+#### Tool
+
+```typescript
+interface Tool {
+  type: "function";
+  function: {
+    name: string;
+    description: string;
+    parameters: Record<string, any>; // JSON Schema
+  };
+}
+```
+
+#### StreamChunk Variants
+
+**ContentStreamChunk**
+
+```typescript
+{
+  type: "content"
+  id: string
+  model: string
+  timestamp: number
+  delta: string           // New token(s)
+  content: string         // Full accumulated content
+  role?: "assistant"
+}
+```
+
+**ToolCallStreamChunk**
+
+```typescript
+{
+  type: "tool_call"
+  id: string
+  model: string
+  timestamp: number
+  toolCall: {
+    id: string
+    type: "function"
+    function: {
+      name: string
+      arguments: string   // Incremental JSON arguments
+    }
+  }
+  index: number
+}
+```
+
+**DoneStreamChunk**
+
+```typescript
+{
+  type: "done"
+  id: string
+  model: string
+  timestamp: number
+  finishReason: "stop" | "length" | "content_filter" | "tool_calls" | null
+  usage?: {
+    promptTokens: number
+    completionTokens: number
+    totalTokens: number
+  }
+}
+```
+
+**ErrorStreamChunk**
+
+```typescript
+{
+  type: "error"
+  id: string
+  model: string
+  timestamp: number
+  error: {
+    message: string
+    code?: string
+  }
+}
+```
+
+## Advanced Usage
+
+### Tool Calling with Multi-Turn Conversations
+
+```typescript
+import type { Tool, ToolCall } from "@tanstack/ai";
+
+const tools: Tool[] = [
+  {
+    type: "function",
+    function: {
+      name: "get_weather",
+      description: "Get current weather",
+      parameters: {
+        type: "object",
+        properties: {
+          location: { type: "string", description: "City name" },
+        },
+        required: ["location"],
+      },
+    },
+  },
+];
+
+const messages = [{ role: "user", content: "What's the weather in Paris?" }];
+
+let continueLoop = true;
+
+while (continueLoop) {
+  const toolCalls: ToolCall[] = [];
+  const toolCallsMap = new Map();
+
+  for await (const chunk of ai.streamChat({
+    model: "gpt-3.5-turbo",
+    messages,
+    tools,
+  })) {
+    if (chunk.type === "tool_call") {
+      // Accumulate tool call chunks
+      const existing = toolCallsMap.get(chunk.index) || {
+        id: chunk.toolCall.id,
+        name: "",
+        args: "",
+      };
+      if (chunk.toolCall.function.name) {
+        existing.name = chunk.toolCall.function.name;
+      }
+      existing.args += chunk.toolCall.function.arguments;
+      toolCallsMap.set(chunk.index, existing);
+    } else if (chunk.type === "content") {
+      process.stdout.write(chunk.delta);
+    } else if (chunk.type === "done") {
+      if (chunk.finishReason === "tool_calls") {
+        // Convert map to tool calls array
+        toolCallsMap.forEach((call) => {
+          toolCalls.push({
+            id: call.id,
+            type: "function",
+            function: { name: call.name, arguments: call.args },
+          });
+        });
+      } else {
+        continueLoop = false;
+      }
+    }
+  }
+
+  if (toolCalls.length > 0) {
+    // Add assistant message with tool calls
+    messages.push({
+      role: "assistant",
+      content: null,
+      toolCalls,
+    });
+
+    // Execute tools and add results
+    for (const call of toolCalls) {
+      const result = await executeYourTool(call);
+      messages.push({
+        role: "tool",
+        content: result,
+        toolCallId: call.id,
+        name: call.function.name,
+      });
+    }
+    // Continue loop to get final response
+  }
+}
+```
+
+### Provider-Specific Configuration
+
+Each adapter accepts its own configuration:
+
+```typescript
+// OpenAI
+new OpenAIAdapter({
+  apiKey: string,
+  organization: string,
+  baseURL: string,
+  timeout: number,
+  maxRetries: number,
+});
+
+// Anthropic
+new AnthropicAdapter({
+  apiKey: string,
+  baseUrl: string,
+  timeout: number,
+  maxRetries: number,
+});
+
+// Ollama (local)
+new OllamaAdapter({
+  host: string, // Default: "http://localhost:11434"
+});
+
+// Gemini
+new GeminiAdapter({
+  apiKey: string,
+});
+```
+
+## Examples
+
+### Basic Chat
 
 ```typescript
 import { AI } from "@tanstack/ai";
 import { OpenAIAdapter } from "@tanstack/ai-openai";
 
-// Initialize with your preferred adapter
-const ai = new AI(
-  new OpenAIAdapter({
-    apiKey: process.env.OPENAI_API_KEY,
-  })
-);
+const ai = new AI(new OpenAIAdapter({ apiKey: process.env.OPENAI_API_KEY }));
 
-// Simple chat completion
 const response = await ai.chat({
   model: "gpt-3.5-turbo",
-  messages: [
-    { role: "system", content: "You are a helpful assistant." },
-    { role: "user", content: "Hello! How are you?" },
-  ],
+  messages: [{ role: "user", content: "Explain quantum computing" }],
 });
 
 console.log(response.content);
 ```
 
-### Streaming Chat (Structured JSON Chunks)
+### Streaming
 
 ```typescript
-// Stream responses with structured JSON chunks - works with ALL providers!
 for await (const chunk of ai.streamChat({
   model: "gpt-3.5-turbo",
   messages: [{ role: "user", content: "Tell me a story" }],
 })) {
   if (chunk.type === "content") {
-    process.stdout.write(chunk.delta); // Write incremental tokens
-    console.log("Full so far:", chunk.content); // Accumulated content
-  } else if (chunk.type === "tool_call") {
-    console.log("Tool:", chunk.toolCall.function.name);
-  } else if (chunk.type === "done") {
-    console.log("Tokens used:", chunk.usage?.totalTokens);
-  } else if (chunk.type === "error") {
-    console.error("Error:", chunk.error.message);
+    process.stdout.write(chunk.delta);
+  }
+  if (chunk.type === "done") {
+    console.log(`\nTokens: ${chunk.usage?.totalTokens}`);
   }
 }
 ```
 
-### Legacy Streaming (Simple)
+### Switching Providers
 
 ```typescript
-// Simple streaming (backwards compatible)
-for await (const chunk of ai.chatStream({
-  model: "gpt-3.5-turbo",
-  messages: [{ role: "user", content: "Tell me a story" }],
-})) {
-  process.stdout.write(chunk.content);
-}
+// Start with OpenAI
+const ai = new AI(new OpenAIAdapter({ apiKey: "..." }));
+
+// Switch to Anthropic - same code works!
+ai.setAdapter(new AnthropicAdapter({ apiKey: "..." }));
+const response = await ai.chat({ model: "claude-3-sonnet-20240229", messages });
+
+// Switch to local Ollama
+ai.setAdapter(new OllamaAdapter());
+const response2 = await ai.chat({ model: "llama2", messages });
 ```
 
 ### Text Generation
@@ -97,8 +458,8 @@ for await (const chunk of ai.chatStream({
 ```typescript
 const result = await ai.generateText({
   model: "gpt-3.5-turbo-instruct",
-  prompt: "Once upon a time...",
-  maxTokens: 100,
+  prompt: "Write a haiku about TypeScript",
+  maxTokens: 50,
 });
 
 console.log(result.text);
@@ -107,11 +468,13 @@ console.log(result.text);
 ### Summarization
 
 ```typescript
+const longText = `...`; // Your long text
+
 const summary = await ai.summarize({
   model: "gpt-3.5-turbo",
-  text: "Your long text here...",
+  text: longText,
   style: "bullet-points",
-  maxLength: 200,
+  maxLength: 300,
 });
 
 console.log(summary.summary);
@@ -120,102 +483,72 @@ console.log(summary.summary);
 ### Embeddings
 
 ```typescript
-const embeddings = await ai.embed({
+const result = await ai.embed({
   model: "text-embedding-ada-002",
-  input: "Text to embed",
+  input: "Semantic search query",
 });
 
-console.log(embeddings.embeddings[0]);
+const vector = result.embeddings[0]; // number[]
+console.log(`Dimensions: ${vector.length}`);
 ```
 
-## 🔄 Switching Providers
+## CLI Tool
 
-One of the key benefits is the ability to switch providers without changing your code:
-
-```typescript
-import { AI } from "@tanstack/ai";
-import { OpenAIAdapter } from "@tanstack/ai-openai";
-import { AnthropicAdapter } from "@tanstack/ai-anthropic";
-import { OllamaAdapter } from "@tanstack/ai-ollama";
-import { GeminiAdapter } from "@tanstack/ai-gemini";
-
-// Start with OpenAI
-let ai = new AI(new OpenAIAdapter({ apiKey: "key" }));
-
-// Switch to Anthropic
-ai.setAdapter(new AnthropicAdapter({ apiKey: "key" }));
-
-// Use local Ollama
-ai.setAdapter(new OllamaAdapter());
-
-// Try Google Gemini
-ai.setAdapter(new GeminiAdapter({ apiKey: "key" }));
-```
-
-## 🖥️ CLI Demo
-
-Try out the library with our interactive CLI that features **automatic API key prompting** - no configuration needed!
-
-### 🚀 Quick Start (No Setup Required!)
+We provide a full-featured CLI for testing and demos:
 
 ```bash
 # Install and build
-pnpm install
-pnpm build
+pnpm install && pnpm build
 
-# Just run - it will prompt for API keys if needed!
+# Interactive chat
 pnpm cli chat --provider openai
-```
 
-The CLI will:
+# Tool calling demo
+pnpm cli tools --provider openai
 
-1. 🔍 Check for API keys in your environment
-2. 📝 Prompt for keys if not found (with links to get them)
-3. ✅ Validate the keys automatically
-4. 💾 Offer to save them to `.env` for next time
-
-### 🎯 All Commands
-
-```bash
-# From root directory - ALL providers use streaming!
-pnpm cli chat --provider openai
-pnpm cli chat --provider anthropic
-pnpm cli chat --provider ollama
-pnpm cli chat --provider gemini
-
-# Debug mode - see raw JSON stream chunks
+# See JSON stream chunks
 pnpm cli chat --provider openai --debug
 
 # Other commands
-pnpm cli generate --provider anthropic
-pnpm cli summarize --provider gemini
-pnpm cli embed --provider ollama
-
-# Or navigate to the CLI directory
-cd examples/cli
-
-# For development (no build needed)
-pnpm dev chat --provider openai
-pnpm dev chat --provider anthropic --debug
-
-# Use the built version
-pnpm start chat --provider anthropic
+pnpm cli generate --provider anthropic --prompt "..."
+pnpm cli summarize --provider gemini --text "..." --style concise
+pnpm cli embed --provider openai --text "..."
 ```
 
-## 📝 Environment Variables
+See `examples/cli/README.md` for full CLI documentation.
 
-Create a `.env` file in your project:
+## Package Structure
 
-```env
-OPENAI_API_KEY=your_openai_key
-ANTHROPIC_API_KEY=your_anthropic_key
-GOOGLE_API_KEY=your_google_key
-OLLAMA_HOST=http://localhost:11434
+```
+@tanstack/ai/
+├── packages/
+│   ├── ai/                  # Core library
+│   │   ├── types.ts         # Type definitions
+│   │   ├── ai.ts            # Main AI class
+│   │   ├── base-adapter.ts  # Adapter base class
+│   │   └── stream-utils.ts  # Streaming utilities
+│   ├── ai-openai/           # OpenAI adapter
+│   ├── ai-anthropic/        # Anthropic adapter
+│   ├── ai-ollama/           # Ollama adapter
+│   └── ai-gemini/           # Google Gemini adapter
+└── examples/
+    └── cli/                 # Interactive CLI demo
 ```
 
-## 🏗️ Development
+## Provider Support Matrix
 
-This is a monorepo managed with pnpm workspaces:
+| Feature         | OpenAI | Anthropic | Ollama | Gemini |
+| --------------- | ------ | --------- | ------ | ------ |
+| Chat            | ✅     | ✅        | ✅     | ✅     |
+| Streaming       | ✅     | ✅        | ✅     | ✅     |
+| Tool Calling    | ✅     | ⏳        | ⏳     | ⏳     |
+| Text Generation | ✅     | ✅        | ✅     | ✅     |
+| Summarization   | ✅     | ✅        | ✅     | ✅     |
+| Embeddings      | ✅     | ❌        | ✅     | ✅     |
+
+✅ = Fully supported | ⏳ = Planned | ❌ = Not supported by provider
+
+## Development
 
 ```bash
 # Install dependencies
@@ -224,29 +557,28 @@ pnpm install
 # Build all packages
 pnpm build
 
-# Run in development mode
+# Run in dev mode
 pnpm dev
 
-# Run tests
-pnpm test
+# Type checking
+pnpm typecheck
+
+# Clean build artifacts
+pnpm clean
 ```
 
-## 🤝 Contributing
+## Contributing
 
-We welcome contributions! This is a community-driven project that aims to provide a truly open alternative to proprietary AI SDKs.
+We welcome contributions! This is a community-driven project providing a truly open alternative to proprietary AI SDKs.
 
-## 📜 License
+## License
 
-MIT - Use it freely, modify it, share it. No strings attached.
+MIT - Use freely, modify, share. No strings attached.
 
-## 🎯 Mission
+## Philosophy
 
-Unlike certain companies that use open source as a marketing tool only to lock you into their paid services later, @tanstack/ai is committed to remaining truly open source. No enshittification, no bait-and-switch, just honest open-source software that respects developers.
-
-## 🚦 Status
-
-This is a Proof of Concept (PoC) demonstrating how we can build a better, more open AI SDK. Join us in making AI tooling that serves developers, not shareholders.
+Unlike certain companies that use open source as marketing only to lock you into paid services, @tanstack/ai is committed to remaining truly open source. No enshittification, no bait-and-switch, just honest software that respects developers.
 
 ---
 
-Built with ❤️ by the open-source community, because developers deserve better than vendor lock-in disguised as open source.
+Built with ❤️ by the open-source community.

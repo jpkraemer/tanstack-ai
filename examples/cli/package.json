@@ -17,7 +17,8 @@
     "chat": "tsx src/index.ts chat",
     "generate": "tsx src/index.ts generate",
     "summarize": "tsx src/index.ts summarize",
-    "embed": "tsx src/index.ts embed"
+    "embed": "tsx src/index.ts embed",
+    "tools": "tsx src/index.ts tools"
   },
   "keywords": [
     "ai",
