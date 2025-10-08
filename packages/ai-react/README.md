@@ -222,7 +222,7 @@ function App() {
 
 ```typescript
 import express from "express";
-import { AI } from "@tanstack/ai";
+import { AI, toStreamResponse } from "@tanstack/ai";
 import { OpenAIAdapter } from "@tanstack/ai-openai";
 
 const app = express();
@@ -233,31 +233,28 @@ const ai = new AI(new OpenAIAdapter({ apiKey: process.env.OPENAI_API_KEY }));
 app.post("/api/chat", async (req, res) => {
   const { messages } = req.body;
 
-  // Set headers for streaming
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection", "keep-alive");
+  // One line to create streaming response!
+  const stream = ai.streamChat({
+    model: "gpt-3.5-turbo",
+    messages,
+  });
 
-  try {
-    for await (const chunk of ai.streamChat({
-      model: "gpt-3.5-turbo",
-      messages,
-    })) {
-      // Send chunk as Server-Sent Event
-      res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+  const response = toStreamResponse(stream);
+
+  // Copy headers and stream to Express response
+  response.headers.forEach((value, key) => {
+    res.setHeader(key, value);
+  });
+
+  const reader = response.body?.getReader();
+  if (reader) {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      res.write(value);
     }
-
-    res.write("data: [DONE]\n\n");
-    res.end();
-  } catch (error) {
-    res.write(
-      `data: ${JSON.stringify({
-        type: "error",
-        error: { message: error.message },
-      })}\n\n`
-    );
-    res.end();
   }
+  res.end();
 });
 
 app.listen(3000);
@@ -267,7 +264,7 @@ app.listen(3000);
 
 ```typescript
 // app/api/chat/route.ts
-import { AI } from "@tanstack/ai";
+import { AI, toStreamResponse } from "@tanstack/ai";
 import { OpenAIAdapter } from "@tanstack/ai-openai";
 
 export const runtime = "edge";
@@ -277,34 +274,46 @@ const ai = new AI(new OpenAIAdapter({ apiKey: process.env.OPENAI_API_KEY }));
 export async function POST(req: Request) {
   const { messages } = await req.json();
 
-  const encoder = new TextEncoder();
-  const stream = new ReadableStream({
-    async start(controller) {
-      try {
-        for await (const chunk of ai.streamChat({
-          model: "gpt-3.5-turbo",
-          messages,
-        })) {
-          controller.enqueue(
-            encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`)
-          );
-        }
-        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-        controller.close();
-      } catch (error) {
-        controller.error(error);
-      }
-    },
-  });
-
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-    },
-  });
+  // One line!
+  return toStreamResponse(
+    ai.streamChat({
+      model: "gpt-3.5-turbo",
+      messages,
+    })
+  );
 }
+```
+
+## Example Backend (TanStack Start)
+
+```typescript
+import { createFileRoute } from "@tanstack/react-router";
+import { AI, toStreamResponse } from "@tanstack/ai";
+import { AnthropicAdapter } from "@tanstack/ai-anthropic";
+
+const ai = new AI(
+  new AnthropicAdapter({ apiKey: process.env.ANTHROPIC_API_KEY })
+);
+
+export const Route = createFileRoute("/api/chat")({
+  server: {
+    handlers: {
+      POST: async ({ request }) => {
+        const { messages } = await request.json();
+
+        // One line with automatic tool execution!
+        return toStreamResponse(
+          ai.streamChat({
+            model: "claude-3-5-sonnet-20241022",
+            messages,
+            tools, // Tools with execute functions
+            maxIterations: 5,
+          })
+        );
+      },
+    },
+  },
+});
 ```
 
 ## TypeScript Types

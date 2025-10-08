@@ -202,6 +202,44 @@ Switch providers at runtime.
 ai.setAdapter(new AnthropicAdapter({ apiKey: "..." }));
 ```
 
+#### Helper Functions
+
+##### `toStreamResponse(stream): Response`
+
+Convert a `StreamChunk` async iterable to an HTTP Response with proper SSE headers.
+
+```typescript
+import { toStreamResponse } from "@tanstack/ai";
+
+const stream = ai.streamChat({ model, messages });
+return toStreamResponse(stream);
+```
+
+Returns a `Response` with:
+
+- `Content-Type: text/event-stream`
+- `Cache-Control: no-cache`
+- `Connection: keep-alive`
+- Automatic JSON encoding of chunks
+- Error handling
+- `[DONE]` completion marker
+
+##### `toReadableStream(stream): ReadableStream`
+
+Convert a `StreamChunk` async iterable to a `ReadableStream` for more control.
+
+```typescript
+import { toReadableStream } from "@tanstack/ai";
+
+const stream = ai.streamChat({ model, messages });
+const readableStream = toReadableStream(stream);
+
+// Use in custom Response
+return new Response(readableStream, {
+  headers: { "Custom-Header": "value" },
+});
+```
+
 ### Types
 
 #### Message
@@ -226,8 +264,16 @@ interface Tool {
     description: string;
     parameters: Record<string, any>; // JSON Schema
   };
+  execute?: (args: any) => Promise<string> | string; // Optional: auto-execute
 }
 ```
+
+**Note:** If `execute` is provided, `streamChat` will automatically:
+
+1. Detect when the AI calls this tool
+2. Execute the function with the parsed arguments
+3. Add the result back to the conversation
+4. Continue streaming the final response
 
 #### StreamChunk Variants
 
@@ -407,6 +453,66 @@ for await (const chunk of ai.streamChat({
 - ✅ Adds results back to conversation
 - ✅ Continues until final response (up to `maxIterations`)
 - ✅ You just handle the stream - no manual tool logic!
+
+### Backend Helper - toStreamResponse
+
+Convert streaming responses to HTTP responses with one line:
+
+```typescript
+import { AI, toStreamResponse } from "@tanstack/ai";
+import { OpenAIAdapter } from "@tanstack/ai-openai";
+
+const ai = new AI(new OpenAIAdapter({ apiKey: "..." }));
+
+// Express/Node.js
+app.post("/api/chat", async (req, res) => {
+  const { messages } = req.body;
+
+  const stream = ai.streamChat({
+    model: "gpt-3.5-turbo",
+    messages,
+    tools, // Optional
+  });
+
+  // One line to convert to HTTP response!
+  return toStreamResponse(stream);
+});
+
+// Next.js App Router
+export async function POST(req: Request) {
+  const { messages } = await req.json();
+
+  const stream = ai.streamChat({
+    model: "gpt-3.5-turbo",
+    messages,
+  });
+
+  return toStreamResponse(stream);
+}
+
+// TanStack Start
+export const Route = createFileRoute("/api/chat")({
+  server: {
+    handlers: {
+      POST: async ({ request }) => {
+        const { messages } = await request.json();
+
+        return toStreamResponse(
+          ai.streamChat({ model: "gpt-3.5-turbo", messages })
+        );
+      },
+    },
+  },
+});
+```
+
+The helper handles:
+
+- ✅ Server-Sent Events formatting
+- ✅ Proper headers (Content-Type, Cache-Control, Connection)
+- ✅ JSON encoding of chunks
+- ✅ Error handling and error chunks
+- ✅ Completion marker `[DONE]`
 
 ### Provider-Specific Configuration
 

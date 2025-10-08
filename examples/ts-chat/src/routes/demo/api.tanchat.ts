@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { AI } from "@tanstack/ai";
+import { AI, toStreamResponse } from "@tanstack/ai";
 import { AnthropicAdapter } from "@tanstack/ai-anthropic";
 import type { Tool } from "@tanstack/ai";
 
@@ -72,49 +72,18 @@ export const Route = createFileRoute("/demo/api/tanchat")({
               ? messages
               : [{ role: "system", content: SYSTEM_PROMPT }, ...messages];
 
-          // Set up streaming response
-          const encoder = new TextEncoder();
-          const stream = new ReadableStream({
-            async start(controller) {
-              try {
-                // streamChat automatically handles tool execution!
-                for await (const chunk of ai.streamChat({
-                  model: "claude-3-5-sonnet-20241022",
-                  messages: allMessages,
-                  temperature: 0.7,
-                  tools,
-                  toolChoice: "auto",
-                  maxIterations: 5, // Limit tool calling loops
-                })) {
-                  // Just stream the chunks - tools are executed automatically
-                  controller.enqueue(
-                    encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`)
-                  );
-                }
-
-                controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-                controller.close();
-              } catch (error: any) {
-                controller.enqueue(
-                  encoder.encode(
-                    `data: ${JSON.stringify({
-                      type: "error",
-                      error: { message: error.message },
-                    })}\n\n`
-                  )
-                );
-                controller.close();
-              }
-            },
+          // streamChat automatically handles tool execution!
+          const stream = ai.streamChat({
+            model: "claude-3-5-sonnet-20241022",
+            messages: allMessages,
+            temperature: 0.7,
+            tools,
+            toolChoice: "auto",
+            maxIterations: 5,
           });
 
-          return new Response(stream, {
-            headers: {
-              "Content-Type": "text/event-stream",
-              "Cache-Control": "no-cache",
-              Connection: "keep-alive",
-            },
-          });
+          // Convert to HTTP response - that's it!
+          return toStreamResponse(stream);
         } catch (error) {
           console.error("Chat API error:", error);
           return new Response(
