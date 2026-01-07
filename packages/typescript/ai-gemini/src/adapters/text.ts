@@ -212,15 +212,25 @@ export class GeminiTextAdapter<
 
         for (const part of parts) {
           if (part.text) {
-            accumulatedContent += part.text
-            yield {
-              type: 'content',
-              id: generateId(this.name),
-              model,
-              timestamp,
-              delta: part.text,
-              content: accumulatedContent,
-              role: 'assistant',
+            if (part.thought) {
+              yield {
+                type: 'thinking',
+                content: part.text,
+                id: generateId(this.name),
+                model,
+                timestamp,
+              }
+            } else {
+              accumulatedContent += part.text
+              yield {
+                type: 'content',
+                id: generateId(this.name),
+                model,
+                timestamp,
+                delta: part.text,
+                content: accumulatedContent,
+                role: 'assistant',
+              }
             }
           }
 
